@@ -1,0 +1,227 @@
+import requests
+import pandas as pd
+from bs4 import BeautifulSoup
+from sklearn.feature_extraction.text import TfidfVectorizer
+from fpdf import FPDF
+import matplotlib.pyplot as plt
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import os
+
+# Глобальная переменная для хранения профиля кандидата
+candidate_profile_storage = {}
+
+# Шаг 1 Получение информации профиля без использования API
+def get_vk_profile_data(profile_url):
+    response = requests.get(profile_url)
+    if response.status_code != 200:
+        raise Exception("Не удалось получить данные профиля")
+
+    soup = BeautifulSoup(response.text, 'html.parser')
+    profile_info = extract_profile_info(soup)
+    posts = extract_posts(soup)
+    groups = extract_groups(soup)
+    friends_count = extract_friends_count(soup)
+    languages = extract_languages(soup)
+
+    return profile_info, posts, groups, friends_count, languages
+
+
+# Функции для извлечения данных из HTML страницы профиля
+def extract_profile_info(soup):
+    name = soup.find('h1', {'class': 'page_name'}).get_text(strip=True) if soup.find('h1', {'class': 'page_name'}) else 'Unknown'
+    education = soup.find('div', {'class': 'education'}).get_text(strip=True) if soup.find('div', {'class': 'education'}) else 'Unknown'
+    career = soup.find('div', {'class': 'career'}).get_text(strip=True) if soup.find('div', {'class': 'career'}) else 'Unknown'
+    city = soup.find('div', {'class': 'current_city'}).get_text(strip=True) if soup.find('div', {'class': 'current_city'}) else 'Unknown'
+    return {
+        'Name': name,
+        'Education': education,
+        'Career': career,
+        'City': city
+    }
+
+
+def extract_posts(soup):
+    posts = soup.find_all('div', {'class': 'wall_post_text'})
+    post_texts = [post.get_text(strip=True) for post in posts]
+    return post_texts
+
+
+def extract_groups(soup):
+    groups = soup.find_all('div', {'class': 'group_name'})
+    group_names = [group.get_text(strip=True) for group in groups]
+    return group_names
+
+
+def extract_friends_count(soup):
+    friends_section = soup.find('div', {'class': 'friends_count'})
+    return int(friends_section.get_text(strip=True).split()[0]) if friends_section else 0
+
+
+def extract_languages(soup):
+    languages_section = soup.find('div', {'class': 'languages'})
+    languages = languages_section.get_text(strip=True).split(', ') if languages_section else []
+    return languages
+
+
+# Шаг 3 Анализ текста с использованием TF-IDF
+# Шаг 3 Анализ текста с использованием TF-IDF
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+
+# Шаг 3 Анализ текста с использованием TF-IDF
+def analyze_text(posts):
+    # Преобразуем все значения в строки и удаляем пустые строки
+    posts = [str(post) for post in posts if post not in [None, '', pd.NA]]
+
+    # Убираем ограничение на max_features и стоп-слова
+    tfidf = TfidfVectorizer(min_df=1, stop_words=None)
+    try:
+        if not posts:  # Проверка, не является ли список пустым
+            raise ValueError("Посты пусты после фильтрации.")
+
+        tfidf_matrix = tfidf.fit_transform(posts)
+        feature_names = tfidf.get_feature_names_out()
+        word_importance = pd.DataFrame(tfidf_matrix.toarray(), columns=feature_names).sum().sort_values(ascending=False)
+        return word_importance
+    except ValueError as e:
+        print(f"Ошибка при анализе текста: {e}")
+        return pd.Series(dtype=float)
+
+
+# Шаг 4 Создание профиля кандидата на основе полученных данных
+def generate_candidate_profile(profile_info, groups, word_importance, friends_count, languages):
+    communicative_level = len(groups) + friends_count
+    literacy_level = word_importance[word_importance.index.str.contains('[а-яА-Я]', regex=True)].sum()
+    professional_activity = len(profile_info['Career'].split()) if profile_info['Career'] != 'Unknown' else 0
+    language_knowledge = len(languages)
+
+    candidate_profile = {
+        'Name': profile_info['Name'],
+        'City': profile_info['City'],
+        'Education': profile_info['Education'],
+        'Career': profile_info['Career'],
+        'Friends Count': friends_count,
+        'Top Interests': groups,
+        'Top Words': word_importance.head(10).index.tolist(),
+        'Communicative Level': communicative_level,
+        'Literacy Level': literacy_level,
+        'Professional Activity': professional_activity,
+        'Languages Known': languages,
+        'Language Knowledge Level': language_knowledge
+    }
+
+    return candidate_profile
+
+def generate_pdf_report(candidate_profile, filename):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font('Arial', size=12)
+    pdf.cell(200, 10, txt='Candidate Profile Report', ln=True, align='C')
+    pdf.ln(10)
+    for key, value in candidate_profile.items():
+        if isinstance(value, list):
+            value = ', '.join(value)
+        pdf.cell(200, 10, txt=f'{key}: {value}', ln=True)
+    pdf.output(filename)
+
+
+# Шаг 6 Создание визуализаций для софт и хард скиллов
+def generate_skill_visualizations(candidate_profile, candidate_name):
+    skills = candidate_profile['Top Words']
+    values = [1] * len(skills)
+    plt.figure(figsize=(10, 5))
+    plt.bar(skills, values)
+    plt.xlabel('Skills')
+    plt.ylabel('Importance')
+    plt.title(f'{candidate_name} Skills')
+    plt.xticks(rotation=45)
+    plt.savefig(f'{candidate_name}_skills.png')
+
+    # Визуализация метрик
+    metrics = ['Communicative Level', 'Literacy Level', 'Professional Activity', 'Language Knowledge Level']
+    metric_values = [
+        candidate_profile['Communicative Level'],
+        candidate_profile['Literacy Level'],
+        candidate_profile['Professional Activity'],
+        candidate_profile['Language Knowledge Level']
+    ]
+    plt.figure(figsize=(10, 5))
+    plt.bar(metrics, metric_values, color='skyblue')
+    plt.xlabel('Metrics')
+    plt.ylabel('Level')
+    plt.title(f'{candidate_name} Metrics Overview')
+    plt.savefig(f'{candidate_name}_metrics.png')
+
+# Функция для анализа профиля
+async def analyze_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) == 0:
+        await update.message.reply_text('Пожалуйста, укажите ссылку на профиль.')
+        return
+
+    profile_url = context.args[0]
+
+    try:
+        profile_info, posts, groups, friends_count, languages = get_vk_profile_data(profile_url)
+        word_importance = analyze_text(posts)
+        candidate_profile = generate_candidate_profile(profile_info, groups, word_importance, friends_count, languages)
+
+        # Сохранение профиля кандидата для последующей обработки
+        candidate_profile_storage[update.effective_chat.id] = candidate_profile
+
+        filename = f'{candidate_profile["Name"]}_profile.pdf'
+        generate_pdf_report(candidate_profile, filename)
+        generate_skill_visualizations(candidate_profile, candidate_profile['Name'])
+
+        await update.message.reply_text(
+            'Профиль успешно проанализирован. Вы можете получить результаты, отправив команду /результат.'
+        )
+    except Exception as e:
+        await update.message.reply_text(f'Произошла ошибка: {str(e)}')
+
+# Функция для отображения результатов
+async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Получение профиля кандидата по ID чата
+    candidate_profile = candidate_profile_storage.get(update.effective_chat.id)
+
+    if candidate_profile is None:
+        await update.message.reply_text(
+            'Профиль не был проанализирован. Пожалуйста, выполните команду /analyze_profile сначала.'
+        )
+        return
+
+    filename = f'{candidate_profile["Name"]}_profile.pdf'
+
+    # Отправка PDF отчета пользователю
+    with open(filename, 'rb') as f:
+        await update.message.reply_document(f)
+
+    # Отправка графиков
+    skills_image = f'{candidate_profile["Name"]}_skills.png'
+    metrics_image = f'{candidate_profile["Name"]}_metrics.png'
+
+    # Отправляем изображение скиллов
+    with open(skills_image, 'rb') as f:
+        await update.message.reply_photo(f)
+
+    # Отправляем изображение метрик
+    with open(metrics_image, 'rb') as f:
+        await update.message.reply_photo(f)
+
+# Функция для команды /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text('Добро пожаловать! Отправьте команду /analyze_profile и ссылку на профиль.')
+
+# Основная функция для запуска бота
+def main():
+    # Замените 'YOUR_TOKEN' на ваш токен от BotFather
+    application = ApplicationBuilder().token('7362232263:AAHGeZcF5uUG_z44VCExSWvl-pnzCZoDDos').build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("analyze_profile", analyze_profile))
+    application.add_handler(CommandHandler("result", show_results))
+
+    application.run_polling()
+
+if __name__ == "__main__":
+    main()
