@@ -215,7 +215,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Основная функция для запуска бота
 def main():
-    # Замените 'YOUR_TOKEN' на ваш токен от BotFather
     application = ApplicationBuilder().token('7362232263:AAHGeZcF5uUG_z44VCExSWvl-pnzCZoDDos').build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("analyze_profile", analyze_profile))
